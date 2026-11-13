@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.javaexamples</groupId>
+  <artifactId>java-examples-parent</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <name>Java Examples - Senior/Staff Fintech Interview Deep Dive</name>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+  </properties>
+
+  <modules>
+    <module>module01</module>
+    <module>module02</module>
+    <module>module03</module>
+    <module>module04</module>
+    <module>module05</module>
+    <module>module06</module>
+    <module>module07</module>
+    <module>module08</module>
+    <module>module09</module>
+    <module>module10</module>
+    <module>module11</module>
+    <module>module12</module>
+    <module>module13</module>
+    <module>module14</module>
+    <module>module15</module>
+    <module>module16</module>
+    <module>module17</module>
+    <module>explanations</module>
+  </modules>
+</project>

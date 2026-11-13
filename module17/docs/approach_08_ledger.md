@@ -1,0 +1,13 @@
+# Approach 08 - Double-Entry Ledger (`com.revolut.buildit.ledger`)
+
+Requirements: journal entries with postings that balance per currency, append-only, derived balances, idempotent by entry id, reconciliation.
+
+Design
+- `Posting(account, currency, amount)`; `JournalEntry` validates in its compact constructor: >= 2 postings, per-currency sum zero (`UnbalancedEntryException`).
+- Validation happens before the lock; `ids.add(id)` claims the id (CHM key set); `ReentrantReadWriteLock` guards journal + balances.
+- Balances are a projection updated under the write lock; `reconcile()` rebuilds from the journal and reports mismatches; `systemTotal(currency)` must be zero.
+- `transfer()` is sugar for a two-posting entry.
+
+Trade-offs: persistence as append-only table + balance snapshots, partitioning by account with cross-shard entries via saga, immutability of history (reversals are new entries), audit/retention, FX legs balanced per currency with a P&L account absorbing rounding.
+
+Tests: balances and zero system total, idempotent id, unbalanced/single/zero postings rejected with nothing appended, multi-currency entry, 8 threads x 500 transfers reconcile cleanly.
