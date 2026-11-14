@@ -12,6 +12,7 @@ class PaymentProcessorTest {
     void cardProcessorProducesCardReference() {
         PaymentProcessor p = new CardPaymentProcessor();
         PaymentReceipt r = p.process("p1", new BigDecimal("10.00"), "GBP");
+        //In real case senario, caller should be able to call only process methods (invariant workflow).
         assertEquals("CARD", r.rail());
         assertEquals("CARD-1", r.reference());
     }

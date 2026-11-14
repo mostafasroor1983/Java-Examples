@@ -2,6 +2,8 @@ package module01.exercise2;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -9,8 +11,8 @@ import java.util.Objects;
  * PREMIUM customers get a 50% discount on the computed fee.
  */
 public final class CardFeeContext {
-    static final BigDecimal PREMIUM_DISCOUNT = new BigDecimal("0.50");
-
+    final Map<CustomerTier, BigDecimal> map = Map.of(CustomerTier.PLUS, new BigDecimal("1.00"),
+            CustomerTier.PREMIUM, new BigDecimal("0.50"), CustomerTier.STANDARD, new BigDecimal("1.00"));
     private FeeStrategy strategy;
 
     public CardFeeContext(FeeStrategy strategy) {
@@ -27,9 +29,7 @@ public final class CardFeeContext {
         }
         Objects.requireNonNull(tier, "tier");
         BigDecimal fee = strategy.fee(amount);
-        if (tier == CustomerTier.PREMIUM) {
-            fee = fee.multiply(PREMIUM_DISCOUNT);
-        }
+        fee = fee.multiply(map.getOrDefault(tier, new BigDecimal("0.30")));
         return fee.setScale(2, RoundingMode.HALF_UP);
     }
 }

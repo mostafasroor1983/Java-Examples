@@ -32,9 +32,10 @@ class BankAccountTest {
     @Test
     void historyIsDefensiveCopy() {
         BankAccount acc = new BankAccount("A1", BigDecimal.ONE);
-        List<String> h = acc.history();
+        List<String> h = acc.history(); // return unmodefiable copy of the list
         assertThrows(UnsupportedOperationException.class, () -> h.add("HACK"));
         assertEquals(1, acc.history().size());
+        assertEquals(1, h.size());
     }
 
     @Test
@@ -46,10 +47,12 @@ class BankAccountTest {
         assertThrows(IllegalArgumentException.class, () -> acc.withdraw(null));
     }
 
+
+    // Concurrent threads are depositing money, each one 1$ => balance = number of deposit call
     @Test
     void concurrentDepositsAreExact() throws Exception {
         BankAccount acc = new BankAccount("A1", BigDecimal.ZERO);
-        int threads = 8, perThread = 1000;
+        int threads = 8, perThread = 100000;
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         CountDownLatch start = new CountDownLatch(1);
         CountDownLatch done = new CountDownLatch(threads);
@@ -70,4 +73,38 @@ class BankAccountTest {
         pool.shutdown();
         assertEquals(new BigDecimal(threads * perThread), acc.balance());
     }
+
+
+    /*Concurrent threads are depositing & withdrawing money, each one 1$ added and 1$ subtracted => balance = 0.
+    There is no race condition in this case, because if we have thread on deposit the entire bank account object
+    will be locked => no another thread on withdraw method.
+     */
+    @Test
+    void concurrentDepositsAndWithdrawalsBalanceIsZero() throws Exception {
+        BankAccount acc = new BankAccount("A1", BigDecimal.ZERO);
+        int threads = 8, perThread = 100000;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(threads);
+        for (int t = 0; t < threads; t++) {
+            pool.submit(() -> {
+                try {
+                    start.await();
+                    for (int i = 0; i < perThread; i++) {
+                        acc.withdraw(BigDecimal.ONE);
+                        acc.deposit(BigDecimal.ONE);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+        start.countDown();
+        assertTrue(done.await(10, TimeUnit.SECONDS));
+        pool.shutdown();
+        assertEquals(BigDecimal.ZERO, acc.balance());
+    }
+
 }

@@ -3,7 +3,8 @@ package module01.solid.ocp.good;
 import java.math.BigDecimal;
 import java.util.List;
 
-/** GOOD: new fee types are new classes; this calculator never changes. Unknown types fail loudly. */
+/** GOOD: new fee types are new classes; this calculator never changes.
+ * Unknown types fail loudly. */
 public final class FeeCalculator {
     private final List<FeePolicy> policies;
 
@@ -18,4 +19,12 @@ public final class FeeCalculator {
                 .orElseThrow(() -> new IllegalArgumentException("no fee policy for " + type))
                 .fee(amount);
     }
+
+
+
+    // This is better with open-close and polymorphism principles.
+    public BigDecimal fee(FeePolicy policy, BigDecimal amount) {
+        return policy.fee(amount);
+    }
+
 }

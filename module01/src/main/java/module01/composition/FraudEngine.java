@@ -16,10 +16,10 @@ public final class FraudEngine {
         this.checks = List.copyOf(Objects.requireNonNull(checks, "checks"));
     }
 
-    public FraudDecision evaluate(String customerId, BigDecimal amount, String country) {
+    public FraudDecision evaluate(String customerId,String merchantId, BigDecimal amount, String country) {
         List<String> reasons = new ArrayList<>();
         for (FraudCheck check : checks) {
-            String reason = check.reject(customerId, amount, country);
+            String reason = check.reject(customerId, merchantId, amount, country);
             if (reason != null) {
                 reasons.add(reason);
             }

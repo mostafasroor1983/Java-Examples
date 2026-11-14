@@ -12,24 +12,25 @@ class FraudEngineTest {
     private final FraudEngine engine = new FraudEngine(List.of(
             StandardChecks.amountAbove(new BigDecimal("1000")),
             StandardChecks.blockedCountries(Set.of("KP")),
-            StandardChecks.blockedCustomers(Set.of("c-bad"))));
+            StandardChecks.blockedCustomers(Set.of("c-bad")),
+            StandardChecks.blockedMerchants(Set.of("MX100"))));
 
     @Test
     void approvesCleanPayment() {
-        var decision = engine.evaluate("c-1", new BigDecimal("50"), "GB");
+        var decision = engine.evaluate("c-1","M-100", new BigDecimal("50"), "GB");
         assertTrue(decision.approved());
         assertTrue(decision.reasons().isEmpty());
     }
 
     @Test
     void collectsAllReasons() {
-        var decision = engine.evaluate("c-bad", new BigDecimal("5000"), "KP");
+        var decision = engine.evaluate("c-bad","MX100", new BigDecimal("5000"), "KP");
         assertFalse(decision.approved());
-        assertEquals(3, decision.reasons().size());
+        assertEquals(4, decision.reasons().size());
     }
 
     @Test
     void engineWithNoChecksApprovesEverything() {
-        assertTrue(new FraudEngine(List.of()).evaluate("x", BigDecimal.TEN, "XX").approved());
+        assertTrue(new FraudEngine(List.of()).evaluate("x", "MX200", BigDecimal.TEN, "XX").approved());
     }
 }

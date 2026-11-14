@@ -67,6 +67,8 @@ class SolidTest {
         void goodHierarchyOnlyAcceptsWithdrawable() {
             var accounts = List.of(
                     new module01.solid.lsp.good.CurrentAccount(new BigDecimal("100")),
+                    // compilation error on sweep call FixedDepositAccount doesn't extend WithdrawableAccount
+                    // new module01.solid.lsp.good.FixedDepositAccount(new BigDecimal("100")),
                     new module01.solid.lsp.good.CurrentAccount(new BigDecimal("50")));
             assertEquals(new BigDecimal("20"), new module01.solid.lsp.good.SweepService().sweep(accounts, BigDecimal.TEN));
             // FixedDepositAccount is not a WithdrawableAccount: the misuse does not compile.

@@ -26,7 +26,8 @@ class MoneyTest {
 
     @Test
     void currencyMismatchIsRejected() {
-        assertThrows(IllegalArgumentException.class, () -> Money.of("1", "GBP").plus(Money.of("1", "EUR")));
+        assertThrows(IllegalArgumentException.class,
+                () -> Money.of("1", "GBP").plus(Money.of("1", "EUR")));
     }
 
     @Test
