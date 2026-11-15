@@ -12,6 +12,7 @@ import java.util.Objects;
 public final class FxQuote {
     private final String pair;
     private final BigDecimal rate;
+    // Instant is immutable and thread-safe class
     private final Instant validUntil;
     private final List<String> venues;
 
@@ -41,8 +42,7 @@ public final class FxQuote {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof FxQuote)) return false;
-        FxQuote q = (FxQuote) o;
+        if (!(o instanceof FxQuote q) ) return false;
         return pair.equals(q.pair) && rate.compareTo(q.rate) == 0
                 && validUntil.equals(q.validUntil) && venues.equals(q.venues);
     }

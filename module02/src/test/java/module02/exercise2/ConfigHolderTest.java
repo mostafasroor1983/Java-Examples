@@ -15,11 +15,17 @@ class ConfigHolderTest {
         ConfigHolder holder = new ConfigHolder(source);
         source.put("fx.spread.bps", "9999");          // alias leak
         assertEquals("9999", holder.getSettings().get("fx.spread.bps"));
+
         holder.getSettings().put("hack", "1");         // getter leak
         assertEquals("1", holder.getSettingsView().get("hack"));
         assertThrows(UnsupportedOperationException.class, () -> holder.getSettingsView().put("x", "y"));
+
         source.put("fx.spread.bps", "1");               // view still tracks the alias
         assertEquals("1", holder.getSettingsView().get("fx.spread.bps"));
+
+        holder.getSettings().put("fx.spread.bps", "2");
+        assertEquals("2", holder.getSettingsView().get("fx.spread.bps"));
+        assertEquals("2", holder.getSettings().get("fx.spread.bps"));
     }
 
     @Test
@@ -28,6 +34,7 @@ class ConfigHolderTest {
         ImmutableConfig cfg = new ImmutableConfig(source);
         source.put("fx.spread.bps", "9999");
         assertEquals(25, cfg.getInt("fx.spread.bps", 0));
+
         assertThrows(UnsupportedOperationException.class, () -> cfg.asMap().put("x", "y"));
         ImmutableConfig cfg2 = cfg.with("fx.spread.bps", "30");
         assertEquals(25, cfg.getInt("fx.spread.bps", 0));

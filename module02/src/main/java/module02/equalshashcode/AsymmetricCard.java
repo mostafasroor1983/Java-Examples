@@ -13,8 +13,8 @@ public class AsymmetricCard {
 
     @Override
     public boolean equals(Object o) {
-        if (!(o instanceof AsymmetricCard)) return false;
-        return pan.equals(((AsymmetricCard) o).pan);
+        if (!(o instanceof AsymmetricCard x)) return false;
+        return pan.equals(x.pan);
     }
 
     @Override
@@ -32,8 +32,7 @@ public class AsymmetricCard {
 
         @Override
         public boolean equals(Object o) {
-            if (!(o instanceof SchemeCard)) return false;
-            SchemeCard other = (SchemeCard) o;
+            if (!(o instanceof SchemeCard other)) return false;
             return pan.equals(other.pan) && scheme.equals(other.scheme);
         }
 

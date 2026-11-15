@@ -3,6 +3,7 @@ package module02.exercise1;
 /**
  * BUGGY key: equals() compares merchant+order, hashCode() is inherited from Object.
  * The ledger "loses" payments on lookup even though they were stored.
+ * 2 equals objects will have different hashCode => inconsistency => loses payment on lookup
  */
 public final class PaymentRef {
     private final String merchantId;
@@ -23,8 +24,7 @@ public final class PaymentRef {
 
     @Override
     public boolean equals(Object o) {
-        if (!(o instanceof PaymentRef)) return false;
-        PaymentRef p = (PaymentRef) o;
+        if (!(o instanceof PaymentRef p)) return false;
         return merchantId.equals(p.merchantId) && orderId.equals(p.orderId);
     }
     // BUG: no hashCode()

@@ -6,8 +6,8 @@ import java.util.Currency;
 import java.util.Objects;
 
 /**
- * Value object: identity is defined by state. BigDecimal.equals is scale-sensitive
- * (1.0 != 1.00), so the constructor normalises scale - otherwise equals/hashCode disagree with compareTo.
+ * Value object: identity is defined by state. BigDecimal.equals is scale-sensitive (1.0 != 1.00),
+ * so the constructor normalises scale - otherwise equals/hashCode disagree with compareTo.
  */
 public final class Money implements Comparable<Money> {
     private final BigDecimal amount;
@@ -16,6 +16,8 @@ public final class Money implements Comparable<Money> {
     private Money(BigDecimal amount, Currency currency) {
         this.currency = Objects.requireNonNull(currency, "currency");
         Objects.requireNonNull(amount, "amount");
+
+        //In case we have amount with necessary rounding => ArithmeticException
         this.amount = amount.setScale(currency.getDefaultFractionDigits(), RoundingMode.UNNECESSARY);
     }
 
@@ -64,8 +66,7 @@ public final class Money implements Comparable<Money> {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof Money)) return false;
-        Money m = (Money) o;
+        if (!(o instanceof Money m)) return false;
         return amount.equals(m.amount) && currency.equals(m.currency);
     }
 

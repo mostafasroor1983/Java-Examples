@@ -26,8 +26,8 @@ public final class Account {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof Account)) return false;
-        return iban.equals(((Account) o).iban);
+        if (!(o instanceof Account account)) return false;
+        return iban.equals(account.iban);
     }
 
     @Override

@@ -23,6 +23,8 @@ class PaymentRecordTest {
         List<String> tags = new ArrayList<>(List.of("a"));
         Payment p = new Payment("p1", BigDecimal.ONE, "GBP", tags);
         tags.add("b");
+
+        // Correct, because p.tags() is copy not able to modify
         assertEquals(List.of("a"), p.tags());
         assertThrows(UnsupportedOperationException.class, () -> p.tags().add("c"));
         assertThrows(IllegalArgumentException.class, () -> Payment.of("p", "0", "GBP"));

@@ -4,7 +4,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
-/** GOOD: copies in, exposes an unmodifiable immutable copy, builder for changes. */
+/**
+ * GOOD: copies in, exposes an unmodifiable immutable copy, builder for changes.
+ */
 public final class ImmutableConfig {
     private final Map<String, String> settings;
 
@@ -17,7 +19,8 @@ public final class ImmutableConfig {
     }
 
     public int getInt(String key, int defaultValue) {
-        return get(key).map(Integer::parseInt).orElse(defaultValue);
+        return get(key).map(Integer::parseInt)
+                .orElse(defaultValue);
     }
 
     public Map<String, String> asMap() {
@@ -25,14 +28,18 @@ public final class ImmutableConfig {
     }
 
     public ImmutableConfig with(String key, String value) {
+        //In here we created a new instance using new, not just creating a new reference
+        //var copy = settings; doesn't work becuse every change need a new instance.
         var copy = new java.util.HashMap<>(settings);
+
         copy.put(Objects.requireNonNull(key), Objects.requireNonNull(value));
         return new ImmutableConfig(copy);
     }
 
     @Override
     public boolean equals(Object o) {
-        return o instanceof ImmutableConfig && settings.equals(((ImmutableConfig) o).settings);
+        return (o instanceof ImmutableConfig immutableConfig)
+                && settings.equals(immutableConfig.settings);
     }
 
     @Override

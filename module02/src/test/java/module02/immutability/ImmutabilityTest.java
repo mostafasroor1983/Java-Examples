@@ -18,6 +18,8 @@ class ImmutabilityTest {
     void badQuoteLeaksInternals() {
         List<String> venues = new ArrayList<>(List.of("LMAX"));
         Date until = new Date(1_000L);
+
+        //Mutable class that we can change the instance after creation.
         MutableFxQuote q = new MutableFxQuote("GBPUSD", BigDecimal.ONE, until, venues);
         q.getVenues().add("EBS");
         q.getValidUntil().setTime(0L);
@@ -32,11 +34,16 @@ class ImmutabilityTest {
         venues.add("EBS");
         assertEquals(List.of("LMAX"), q.venues());
         assertThrows(UnsupportedOperationException.class, () -> q.venues().add("X"));
+
+        //A new FxQuote q2 instance
         FxQuote q2 = q.withRate(new BigDecimal("1.26"));
         assertEquals(new BigDecimal("1.25"), q.rate());
         assertEquals(new BigDecimal("1.26"), q2.rate());
         assertTrue(q.isValidAt(Instant.ofEpochSecond(100)));
+
+        // now is 101 and validUntil is 100
         assertFalse(q.isValidAt(Instant.ofEpochSecond(101)));
+
         assertThrows(IllegalArgumentException.class, () -> q.withRate(BigDecimal.ZERO));
     }
 
@@ -44,6 +51,8 @@ class ImmutabilityTest {
     void goodQuoteEqualityIgnoresScale() {
         FxQuote a = new FxQuote("GBPUSD", new BigDecimal("1.250"), Instant.EPOCH, List.of());
         FxQuote b = new FxQuote("GBPUSD", new BigDecimal("1.25"), Instant.EPOCH, List.of());
+
+        //a == b because we are using rate.compareTo(o.rate) in equals method
         assertEquals(a, b);
         assertEquals(a.hashCode(), b.hashCode());
     }
