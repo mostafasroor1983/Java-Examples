@@ -4,6 +4,31 @@ Package root: `module14`. Domain: fee tables, PAN masking, balance stores, reque
 Tests assert **correctness** of each fast/slow pair; timings are collected but not asserted, because CI hardware varies.
 For real numbers use JMH.
 
+## Overview
+Payment systems have hard latency budgets: a card authorisation typically has a few hundred milliseconds end to end,
+of which your service gets a fraction. Meeting a p99 target depends on understanding the JVM: class loading and warm-up,
+JIT inlining, allocation and GC, boxing, false sharing and lock contention. This module demonstrates each with a fast/slow pair
+whose **correctness** is tested (timings are never asserted). It adds **minor-unit arithmetic vs `BigDecimal`** with a
+200k-case equivalence test, a **mini benchmark harness** explaining what JMH does for you, and a per-thread **allocation probe**.
+
+## Learning objectives
+- Explain tiered JIT, inlining, escape analysis and why benchmarks need warm-up and result consumption.
+- Relate allocation rate to GC frequency and tail latency; measure allocation per operation.
+- Decide when `long` minor units beat `BigDecimal`, and how to keep them provably correct.
+- Profile before optimising: JFR, async-profiler, GC logs, `jcmd`, and JMH for micro-benchmarks.
+
+## Prerequisites
+- Module10 (memory model: false sharing builds on cache lines), module11 (contention), module02 (`BigDecimal` rules).
+
+## Java version notes
+| Feature | Status | Where |
+|---|---|---|
+| G1 default GC, JFR built in (free since 11) | Java 9 / 11+ | tooling sections |
+| ZGC production-ready; Shenandoah in OpenJDK builds | Java 15+ | GC table |
+| Generational ZGC (`-XX:+UseZGC -XX:+ZGenerational`) | **Java 21** | GC table |
+| `getCurrentThreadAllocatedBytes()` | Java 14+ (HotSpot) | `allocation.AllocationProbe` |
+| Records, pattern matching for `instanceof` | **Java 17** | new examples; module compiled with `--release 21` |
+
 ## Class loading (`classloading`)
 - Hierarchy: bootstrap (java.base) -> platform -> application; **parent-first** delegation, so two child loaders sharing a parent see one `Class` object.
 - Loading is lazy; **initialisation** (static blocks, static field initialisers) happens on first *active use*: `new`, static method call, non-constant static field access, `Class.forName(name)` (default `initialize=true`).
@@ -87,3 +112,69 @@ Also: shrink critical sections (compute outside, publish inside) and never do I/
 1. Write a JMH benchmark for `sumBoxed` vs `sumPrimitive` and report allocation rate with the GC profiler.
 2. Run `FalseSharingDemo` with `-XX:-RestrictContended` and a `@Contended` variant; record the speed-up on your machine.
 3. Add a `Striped` store with power-of-two stripes using `hash & (n-1)` and explain why `floorMod` was needed before.
+
+---
+
+## Production deep dive
+
+### Example 1: `money.MinorUnitFees`, `long` cents vs `BigDecimal`
+| | `BigDecimal` | `long` minor units + basis points |
+|---|---|---|
+| Correctness by default | high: arbitrary precision, explicit rounding | **your job**: overflow, rounding, scale |
+| Allocation per fee | several objects | zero |
+| Relative speed (one local run, not asserted) | 1x | about 5x |
+| Overflow | impossible | detected with `Math.multiplyExact` / `addExact` |
+| Readability | good | requires an API that hides the units |
+
+**Why it matters.** Interest accrual over millions of accounts or fee calculation on the authorisation path can be dominated
+by `BigDecimal` allocation. Minor units are a legitimate optimisation, *if* they are proven equivalent.
+**How it is proven.** A property-style test runs 200,000 random (amount, rate) pairs (fixed seed, so reproducible) and asserts
+identical results to the `BigDecimal` reference, including HALF_EVEN ties (`14.5 -> 14`, `43.5 -> 44`) and negative amounts.
+Overflow throws instead of wrapping into a negative fee.
+
+### Example 2: `benchmark.MiniBenchmark`, why JMH exists
+```mermaid
+flowchart LR
+    W[warm-up iterations: interpreter, C1, C2 compile] --> M[measured iterations]
+    M --> B[results XORed into a sink: no dead-code elimination]
+    M --> P[sort samples: median and p99]
+    P --> J[real decisions: JMH with forks, error bounds, -prof gc]
+```
+**Pitfalls it demonstrates:** measuring cold code, letting the JIT delete unused results, and reporting averages for a
+latency SLA. JMH additionally forks JVMs, prevents constant folding, isolates GC noise and reports confidence intervals.
+Use `-prof gc` in JMH to see allocation per operation.
+
+### Example 3: `allocation.AllocationProbe`
+Measures bytes allocated by the current thread. The test shows 100,000 retained `BigDecimal`s allocate megabytes while
+filling a pre-allocated `long[]` allocates almost nothing. Retained objects are used on purpose, because escape analysis may remove
+allocations of objects that do not escape (one reason naive allocation benchmarks lie).
+In production, use JFR allocation sampling or async-profiler `-e alloc` instead of code instrumentation.
+
+## GC choice for financial services (JDK 17/21)
+| Collector | Pause profile | Typical fit |
+|---|---|---|
+| G1 (default) | tunable target (`-XX:MaxGCPauseMillis`), tens of ms | most services; start here |
+| ZGC (generational in 21) | sub-millisecond pauses, more CPU and memory headroom | latency-critical APIs (authorisation, pricing) |
+| Parallel | longest pauses, best throughput | batch jobs (EOD reconciliation, statement runs) |
+| Serial | single-threaded | tiny containers and tools only |
+
+## Performance investigation checklist
+1. **Define the SLO** (e.g. p99 < 50 ms at 2,000 TPS) and reproduce with a load test that uses production-like data.
+2. **Look before tuning:** GC logs (`-Xlog:gc*`), JFR (`jcmd <pid> JFR.start duration=60s filename=rec.jfr`), thread dumps.
+3. **Find the bottleneck:** CPU (profiler flame graph), allocation (JFR/async-profiler alloc), locks (JFR `jdk.JavaMonitorEnter`), I/O.
+4. **Change one thing**, re-measure the same percentile, and keep the JMH or load-test evidence with the change.
+5. Containers: set `-XX:MaxRAMPercentage`, check that `availableProcessors()` matches the CPU quota, and avoid swap.
+
+## Common pitfalls
+- Micro-optimising code that is 0.1% of the profile; trusting `System.currentTimeMillis()` loops as benchmarks.
+- Asserting timings in CI tests (flaky); asserting averages instead of percentiles.
+- Allocation in logging (`log.debug("..." + obj)` builds the string even when debug is off; use parameterised logging).
+- `double` "for speed" in money code. Use `long` minor units if you need speed, never floating point.
+- Huge heaps "to avoid GC", which means longer pauses when it finally runs (with non-concurrent collectors).
+- Ignoring warm-up after deploy: the first requests run interpreted. Warm up via readiness gates or use CDS/AOT caches.
+
+## Production checklist
+- [ ] Latency SLOs defined as percentiles; dashboards show p50/p99/p99.9 and GC pause time.
+- [ ] GC logging and continuous JFR (low overhead) enabled in production.
+- [ ] Performance changes backed by JMH or load-test evidence, with a correctness test against the reference implementation.
+- [ ] Money optimisations (minor units) hidden behind an API, overflow-checked and property-tested.

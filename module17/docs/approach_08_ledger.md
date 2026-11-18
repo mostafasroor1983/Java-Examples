@@ -11,3 +11,14 @@ Design
 Trade-offs: persistence as append-only table + balance snapshots, partitioning by account with cross-shard entries via saga, immutability of history (reversals are new entries), audit/retention, FX legs balanced per currency with a P&L account absorbing rounding.
 
 Tests: balances and zero system total, idempotent id, unbalanced/single/zero postings rejected with nothing appended, multi-currency entry, 8 threads x 500 transfers reconcile cleanly.
+
+## Deeper dive: reversals (implemented)
+`Ledger.reverse(reversalId, originalId, reason)` appends a new entry with every posting negated. History is never edited.
+- Each original can be reversed **once**, enforced by an atomic claim (`ConcurrentHashMap.newKeySet().add`). 32 concurrent reversal
+  requests post exactly one (`LedgerReversalTest`).
+- A reversal cannot itself be reversed (re-post the original instead), and a reason is mandatory, because auditors ask "why".
+- If the reversal id clashes with an existing entry, the claim is released so a correct retry can succeed.
+- Property test: 2,000 random transfers in two currencies with about 10% random reversals always reconcile, with a zero system total per currency.
+
+**Regulatory notes.** Posted entries are immutable; corrections are new entries with who, why and when; retention follows local rules
+(often 5-10 years); access to post manual adjustments should require maker-checker approval (module01 `ddd.PaymentInstruction`).

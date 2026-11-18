@@ -13,4 +13,6 @@ Eight small systems in `com.revolut.buildit.*`, each with an approach note in th
 | 7 | Tiered rate limiter | `ratelimiter` | [approach_07_ratelimiter.md](approach_07_ratelimiter.md) |
 | 8 | Double-entry ledger | `ledger` | [approach_08_ledger.md](approach_08_ledger.md) |
 
+Each approach note ends with a **Deeper dive** (edge cases, failure scenarios, production notes). The ledger now includes immutable reversals (`Ledger.reverse`).
+
 How to use: read the approach, close it, implement from the requirements in 45 minutes, then diff against the reference. Run `mvn -pl module17 test` from the repo root.

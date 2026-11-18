@@ -53,6 +53,9 @@ public final class Ledger {
     private final List<JournalEntry> journal = new ArrayList<>();
     private final Map<AccountKey, BigDecimal> balances = new HashMap<>();
     private final Set<String> ids = ConcurrentHashMap.newKeySet();
+    private final Map<String, JournalEntry> byId = new HashMap<>();           // guarded by rw
+    private final Set<String> reversedOriginals = ConcurrentHashMap.newKeySet();
+    private final Set<String> reversalIds = ConcurrentHashMap.newKeySet();
     private final ReentrantReadWriteLock rw = new ReentrantReadWriteLock();
     private final Supplier<Instant> clock;
 
@@ -67,11 +70,44 @@ public final class Ledger {
         rw.writeLock().lock();
         try {
             journal.add(entry);
+            byId.put(id, entry);
             for (Posting p : postings) balances.merge(new AccountKey(p.account(), p.currency()), p.amount(), BigDecimal::add);
             return true;
         } finally {
             rw.writeLock().unlock();
         }
+    }
+
+    /**
+     * Corrects a posted entry WITHOUT editing history: appends a new entry with every posting negated.
+     * Auditors must be able to see the original, the reversal, who did it and why, so posted entries are never
+     * updated or deleted. Each original can be reversed at most once (atomic claim), even under concurrent requests,
+     * and a reversal itself cannot be reversed (re-post the original instead).
+     *
+     * @return true if the reversal was posted; false if this original was already reversed (idempotent)
+     */
+    public boolean reverse(String reversalId, String originalId, String reason) {
+        Objects.requireNonNull(reversalId);
+        if (reason == null || reason.isBlank()) throw new IllegalArgumentException("a reversal needs a reason");
+        JournalEntry original;
+        rw.readLock().lock();
+        try {
+            original = byId.get(originalId);
+        } finally {
+            rw.readLock().unlock();
+        }
+        if (original == null) throw new IllegalArgumentException("unknown entry " + originalId);
+        if (reversalIds.contains(originalId)) throw new IllegalArgumentException("cannot reverse a reversal: " + originalId);
+        if (!reversedOriginals.add(originalId)) return false; // someone already reversed it
+        List<Posting> negated = original.postings().stream()
+                .map(p -> new Posting(p.account(), p.currency(), p.amount().negate())).toList();
+        reversalIds.add(reversalId);
+        if (!post(reversalId, "reversal of " + originalId + ": " + reason, negated)) {
+            reversedOriginals.remove(originalId);
+            reversalIds.remove(reversalId);
+            throw new IllegalStateException("reversal id already used by another entry: " + reversalId);
+        }
+        return true;
     }
 
     /** Convenience: transfer = debit from, credit to. */

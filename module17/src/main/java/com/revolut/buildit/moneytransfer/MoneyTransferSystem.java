@@ -55,7 +55,13 @@ public final class MoneyTransferSystem {
         Transfer prior = byId.putIfAbsent(transferId, placeholder);
         if (prior != null) return prior.outcome() == Outcome.DUPLICATE ? prior : new Transfer(transferId, from, to, amount, Outcome.DUPLICATE, now);
 
-        Transfer result = execute(transferId, from, to, amount, now);
+        Transfer result;
+        try {
+            result = execute(transferId, from, to, amount, now);
+        } catch (RuntimeException e) {
+            byId.remove(transferId, placeholder); // unexpected failure: release the id so the client can retry
+            throw e;
+        }
         byId.put(transferId, result);
         return result;
     }
@@ -95,7 +101,9 @@ public final class MoneyTransferSystem {
 
     private void rollDay(Account a, Instant now) {
         java.time.LocalDate day = now.atZone(java.time.ZoneOffset.UTC).toLocalDate();
-        if (!day.equals(a.today)) {
+        // Only roll FORWARD. The timestamp is read before the lock is acquired, so a thread stamped 23:59:59 can run
+        // after one stamped 00:00:01; rolling back would wipe today's spent amount and bypass the daily limit.
+        if (a.today == null || day.isAfter(a.today)) {
             a.today = day;
             a.sentToday = BigDecimal.ZERO;
         }

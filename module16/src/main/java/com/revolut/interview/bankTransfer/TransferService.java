@@ -44,7 +44,13 @@ public final class TransferService {
         TransferResult prior = processed.putIfAbsent(req.requestId(), placeholder);
         if (prior != null) return prior.status() == Status.DUPLICATE ? prior : new TransferResult(req.requestId(), Status.DUPLICATE, "already processed: " + prior.status());
 
-        TransferResult result = doTransfer(req);
+        TransferResult result;
+        try {
+            result = doTransfer(req);
+        } catch (RuntimeException e) {
+            processed.remove(req.requestId(), placeholder); // unexpected failure: do not burn the request id
+            throw e;
+        }
         processed.put(req.requestId(), result);
         return result;
     }

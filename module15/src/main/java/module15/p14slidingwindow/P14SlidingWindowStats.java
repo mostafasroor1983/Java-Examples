@@ -65,6 +65,6 @@ public final class P14SlidingWindowStats {
     }
 
     private int slot(long millis) {
-        return (int) Math.floorMod(Math.floorDiv(millis, bucketMillis), buckets);
+        return Math.floorMod(Math.floorDiv(millis, bucketMillis), buckets); // floorMod(long, int) returns int (Java 9+)
     }
 }

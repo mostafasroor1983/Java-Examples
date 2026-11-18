@@ -7,6 +7,10 @@ has JUnit tests for contracts, invariants, error paths and concurrency, and a st
 Toolchain: JDK 21, Maven 3.9+, UTF-8. Test libraries only (JUnit Jupiter 5.10.x; AssertJ 3.24.2 in module16/17). Main code is JDK-only.
 Versions deliberately vary between modules to mirror a real estate of services; do not normalise them.
 
+**Java 17 vs 20 vs 21.** Modules target Java 17 or Java 21 (see the table). There is no Java 20 build: Java 20 was a short-lived
+release in which virtual threads, record patterns and switch patterns were *previews*; they became final in 21. Every module doc has a
+"Java version notes" table that labels each feature as Java 17, Java 21 (final), or preview, and shows the Java 19/20 status where relevant.
+
 ```bash
 mvn clean test                # everything
 mvn -pl module04 test         # one module (from the root)
@@ -32,9 +36,36 @@ mvn -pl module04 test         # one module (from the root)
 | [module15](module15/docs/module15.md) | module15-senior-backend-coding-problems | 17 | Coding problems | P01-P15: counter, balance, transfer, state machine, idempotency, dedup, limiter, LRU, ... |
 | [module16](module16/docs/module16.md) | module16-revolut-interview-prep | 17 + AssertJ | Revolut live coding | `com.revolut.interview.{bank,bankTransfer,payment,ratelimiter}`, guides 01-08 |
 | [module17](module17/docs/README.md) | module17-revolut-build-it | 17 + AssertJ | Revolut Build It | `com.revolut.buildit.*`: load balancer, cart, transfer, subscription, FX, shortener, limiter, ledger |
+| [module18](module18/docs/module18.md) | module18-effective-java | 21 (17 + labelled 21 features) | Effective Java 3rd ed. | all 90 items: one class + one test per item, chapter docs, Java 17/21 updates |
 | [explanations](explanations/docs/explanations.md) | explanations-sealed-pattern-matching | 21 | Sealed + patterns | Success/Failure/Pending, every pattern-matching form |
 
 Cross-cutting documents: [OVERALL_CHEATSHEET.md](OVERALL_CHEATSHEET.md), [REVOLUT_BUILD_IT_PROBLEMS.md](REVOLUT_BUILD_IT_PROBLEMS.md).
+
+## What every module doc contains
+Each `docs/moduleNN.md` starts with **Overview, Learning objectives, Prerequisites, Java version notes**, keeps the original
+BAD/GOOD, cheat sheet and Q&A sections, and ends with a **Production deep dive**. The deep dive covers why each example matters in a bank or fintech, expected behaviour,
+edge cases and failure scenarios, trade-offs, Mermaid diagrams, **in-memory vs production guarantees**, common pitfalls and a checklist.
+
+| Module | Production-grade additions |
+|---|---|
+| 01 | `ddd` maker-checker approval aggregate (separation of duties, domain events); `hexagonal` transfer use case (ports, optimistic locking, idempotency) |
+| 02 | `sensitive.CardNumber` (Luhn, PCI-safe `toString`); `defensive.SignedSettlementBatch` (arrays in records); `allocation.MoneyAllocator` (no lost cents) |
+| 03 | `reconciliation.StatementReconciler` (O(n+m) breaks report); `history.BalanceHistory` (as-of balances, back-valuation) |
+| 04 | `delay.PaymentRetryScheduler` (`DelayQueue`); `ledger.InMemoryDoubleEntryLedger` (ordered locks, consistent snapshots); `cache.FxRateCache` (stampede-proof memoizer) |
+| 05 | `currency.Amount<C>`/`FxRate<F,T>` (currency in the type); `events.TypedEventBus` (type tokens, PECS, failure isolation) |
+| 06 | `settlement.NettingEngine` (multilateral netting); `aml.StructuringDetector` (AML rule) |
+| 07 | `lifecycle` sealed transaction state machine (Java 21 vs Java 17, proven equivalent); `messages.CreditTransferMessage` (text blocks + XML injection) |
+| 08 | `validation` accumulating validator; `redaction.LogSanitizer`; `ambiguity.AmbiguousOutcomeHandler` (timeout is not failure) |
+| 09 | `scheduling.ResilientScheduler` (silent death of periodic tasks); `context` propagation and leak prevention |
+| 10 | `snapshot.QuoteBook` vs `TornQuote` (multi-field consistency); `lockfree.CreditLimitReserver` (`VarHandle` CAS) |
+| 11 | `conditions.FundingAwaitAccount` (`Condition` with deadlines); `diagnostics.DeadlockDetector` (`ThreadMXBean`) |
+| 12 | `retry.AsyncRetry` (backoff + full jitter + deadline); `bulkhead.AsyncBulkhead` |
+| 13 | `throttling.BoundedVirtualFanOut` (virtual threads + semaphore admission control) |
+| 14 | `money.MinorUnitFees` (long vs BigDecimal, property-tested); `benchmark.MiniBenchmark`; `allocation.AllocationProbe` |
+| 15 | `P16TransactionalOutbox` (at-least-once + idempotent consumer); `P17PerKeyOrderedExecutor` |
+| 16 | randomized transfer stress test, payment race tests, `docs/09_production_hardening.md`, deeper dives in guides 02-05/07 |
+| 17 | `Ledger.reverse` (immutable corrections), deeper dives in every approach note |
+| explanations | `OutcomeResponder` (outcome -> API response + action; fraud never revealed) |
 
 ## Conventions
 - Money is `BigDecimal` with explicit scale; `double` appears only in deliberately "bad" examples.
@@ -44,4 +75,4 @@ Cross-cutting documents: [OVERALL_CHEATSHEET.md](OVERALL_CHEATSHEET.md), [REVOLU
 - No secrets, no unsafe deserialisation, no frameworks.
 
 ## Suggested study order
-01 -> 02 -> 03 -> 05 -> 06 -> 07 -> explanations -> 08 -> 09 -> 10 -> 04 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16 -> 17.
+01 -> 02 -> 03 -> 05 -> 06 -> 07 -> explanations -> 08 -> 09 -> 10 -> 04 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18.

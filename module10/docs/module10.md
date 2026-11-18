@@ -2,6 +2,32 @@
 
 Package root: `module10`. Domain: FX rate publication, balances, request stats.
 
+## Overview
+The Java Memory Model (JMM) decides what one thread is *guaranteed* to see of another thread's writes. Most "impossible"
+production bugs (a balance that is briefly wrong, a config that never refreshes, a half-built object) are JMM violations
+that pass every unit test. This module covers happens-before, `volatile`, `final`-field semantics, safe publication,
+double-checked locking, CAS and ABA, and atomics. It then adds two production patterns: **publishing a consistent multi-field
+snapshot** (`snapshot.QuoteBook`, versus the broken `TornQuote`) and a **lock-free credit-limit reserver** with `VarHandle`
+(`lockfree.CreditLimitReserver`).
+
+## Learning objectives
+- List the happens-before rules and use them to prove (not hope) that code is correct.
+- Explain why `volatile` fixes visibility but not compound atomicity, nor consistency *across* fields.
+- Publish objects safely: immutable snapshot + one volatile/atomic reference.
+- Write correct CAS loops for conditional updates (limits, reservations), and know their contention cost and ABA risk.
+- Know when lock-free is worth it and when a lock is simpler and just as fast.
+
+## Prerequisites
+- Module09 (threads, `synchronized`, atomics basics).
+
+## Java version notes
+| Feature | Status | Where |
+|---|---|---|
+| JSR-133 memory model, `volatile`, `final` semantics | Java 5+ | everywhere |
+| `VarHandle` access modes (`getAcquire`, `setRelease`, `compareAndSet`), `Thread.onSpinWait` | Java 9+ | `lockfree.CreditLimitReserver` |
+| Records (final fields: safe publication for free) | **Java 17** | `snapshot.QuoteBook` |
+| `Thread.ofPlatform()` | **Java 21** final (preview in 19/20) | tests; module compiled with `--release 21` |
+
 ## The JMM in five sentences
 1. Each thread may cache values and the compiler may reorder instructions unless a **happens-before** edge forbids it.
 2. Happens-before edges come from: program order within a thread, monitor unlock -> lock, volatile write -> read, `Thread.start()`, `Thread.join()`, and every `java.util.concurrent` synchroniser (latches, executors, futures, concurrent collections).
@@ -91,3 +117,71 @@ Escape analysis lets the JIT scalar-replace objects that never escape a method, 
 1. Implement a lock-free `AtomicMoneyMap` (currency -> balance) using `ConcurrentHashMap.compute` and compare with `AtomicReference<Map>` swap.
 2. Add a bounded `LockFreeQueue` (Michael-Scott) and test exact totals under 8 producers/8 consumers.
 3. Use `VarHandle` to implement `CasCounter` without `AtomicLong` and explain acquire/release modes.
+
+---
+
+## Production deep dive
+
+### Example 1: `snapshot.TornQuote` (BAD) vs `snapshot.QuoteBook` (GOOD)
+```mermaid
+sequenceDiagram
+    participant W as Writer
+    participant R as Reader
+    Note over W,R: TornQuote - two volatile fields
+    W->>W: bid = 101 (volatile write)
+    R->>R: read bid = 101
+    R->>R: read ask = 100 (old) -> crossed market
+    W->>W: ask = 102
+    Note over W,R: QuoteBook - one reference to an immutable snapshot
+    W->>W: build Snapshot(v2, bid 101, ask 102)
+    W->>W: ref.set(snapshot) (single volatile write)
+    R->>R: s = ref.get() -> v1 or v2, never a mix
+```
+**Why it matters.** Pricing, fee schedules, fraud rules and limits are read on every request and updated in batches.
+A torn read quotes a price that never existed. That is a conduct risk, and possibly a P&L loss.
+**Guarantee.** All fields are written *before* the single volatile write of the reference, and every reader that sees the
+new reference sees those fields (happens-before via volatile write and read). Records and `Map.copyOf` make the snapshot
+deeply immutable. The concurrency test publishes 20,000 versions while 4 readers check that paired quotes always come from the same version.
+**Trade-off.** Copy-on-write costs O(map size) per update. That is fine for hundreds of pairs updated a few times a second,
+and wrong for millions of entries updated constantly (use CHM per key, and accept that there is no cross-key consistency).
+**Gotcha.** The `updateAndGet` function may run more than once under contention, so it must be side-effect free.
+
+### Example 2: `lockfree.CreditLimitReserver`
+**Why it matters.** Card authorisation is a latency-critical hot path: thousands of authorisations per second against
+shared limits (corporate card programmes, merchant exposure limits). A lock would serialise them; a CAS loop lets
+uncontended updates proceed without blocking.
+**Expected behaviour (tested with 16 threads x 20,000 operations, including reversals).** The limit is never exceeded at any
+observed instant, the final `reserved` equals the sum of granted minus released, a rejected reservation has no side effect,
+long overflow is detected, and releasing more than is reserved throws (corrupt bookkeeping must be loud).
+**Why `long` minor units and not `BigDecimal`?** CAS needs a single machine word, and cents in a `long` cover ±92 quadrillion.
+Convert at the boundary with explicit currency scale (module02/05).
+**ABA?** Not an issue here: the value is a counter, and any interleaving that returns to the same number is a legitimately
+equal state. ABA matters for CAS on *references* to reused nodes (see `cas.AbaProblem`).
+
+## Choosing a publication / update mechanism
+| Need | Mechanism | Cost |
+|---|---|---|
+| Stop flag, config reference | `volatile` | cheap reads |
+| Single counter, unconditional | `AtomicLong` / `LongAdder` (hot, read rarely) | CAS / striped cells |
+| Conditional single-variable update (limit) | CAS loop (`AtomicLong`, `VarHandle`) | retries under contention |
+| Several fields consistent together | immutable snapshot + `AtomicReference` | copy per update |
+| Several mutable objects updated together | lock (module11) or DB transaction | blocking |
+
+## In-memory vs production
+A CAS on a JVM field is atomic *within that JVM*. Card limits enforced by several authorisation nodes must live in one
+place: a partition owner per card (single writer), or a database conditional update
+(`UPDATE limits SET reserved = reserved + ? WHERE card = ? AND reserved + ? <= limit`). The DB's row lock replaces your CAS.
+
+## Common pitfalls
+- Several `volatile` fields that must change together.
+- Double-checked locking without `volatile`, which can publish a half-constructed singleton.
+- Non-final fields in "immutable" objects shared without synchronisation.
+- `this` escaping from a constructor (listeners, threads started in constructors).
+- CAS loops with side effects, or unbounded spinning under very high contention (consider `LongAdder` or a lock).
+- Using `get()` and `set()` separately on an atomic, which reintroduces the race.
+
+## Production checklist
+- [ ] Every shared mutable field is guarded by a lock, `volatile`, an atomic, or is effectively immutable after safe publication; documented with `// guarded by`.
+- [ ] Multi-field state is published as one immutable snapshot.
+- [ ] CAS loops are side-effect free and covered by a contention test with an invariant check.
+- [ ] Limits that span nodes are enforced by a single authority, not per-JVM counters.

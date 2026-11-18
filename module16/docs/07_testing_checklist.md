@@ -22,3 +22,17 @@ Coverage that interviewers look for
 
 Anti-patterns to avoid live
 - Asserting on `toString()`; testing private methods; sleeping to "let threads finish"; one giant test.
+
+## Beyond unit tests (what to mention for senior roles)
+| Test type | Example in this repo | What it catches |
+|---|---|---|
+| Concurrency / stress | `TransferServiceStressTest`, module04 `InMemoryDoubleEntryLedgerTest` | lost updates, deadlocks, broken invariants under interleaving |
+| Property-based (seeded random) | module02 `MoneyAllocatorTest`, module14 `MinorUnitFeesTest` | edge cases you did not think of; keep the seed for reproducibility |
+| Equivalence / differential | module07 Java 17 vs 21 lifecycle | regressions when rewriting or optimising |
+| Failure injection | module15 `P16Test` (crash after publish), module08 ambiguity tests | duplicate delivery, lost events, timeouts |
+| Integration | (not in this repo) Testcontainers with Postgres/Kafka | real isolation levels, constraints, broker semantics |
+| Performance | module14 `MiniBenchmark` (and JMH) | regressions in hot paths; never assert timings in unit tests |
+
+Rules for concurrency tests: start all threads on a latch, bound every wait with a timeout, assert *invariants*
+(totals, no negative, exactly-once), use `@RepeatedTest` to shake out rare interleavings, and never use `Thread.sleep` to
+"let threads finish".

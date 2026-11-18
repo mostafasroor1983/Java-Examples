@@ -2,6 +2,29 @@
 
 Package root: `module03`. Domain: transaction lists, settlement queues, fee tiers, FX pairs, account caches, ledgers.
 
+## Overview
+Choosing the right collection decides whether an end-of-day job finishes in seconds or hours. This module explains
+how `HashMap` actually works (hash spreading, buckets, treeification, resize), when `TreeMap`, `LinkedHashMap`,
+`ArrayDeque` and `PriorityQueue` win, and then applies them to two core banking tasks:
+**statement reconciliation** (`reconciliation.StatementReconciler`) and **point-in-time balances with back-valued postings**
+(`history.BalanceHistory`). All collections here are single-threaded. Module04 covers concurrent ones.
+
+## Learning objectives
+- Explain `HashMap` lookup, collision handling, treeification and resizing, and pre-size maps correctly.
+- Pick a collection by access pattern (index, key, order, range, priority) and justify it with Big-O.
+- Turn an O(n x m) matching problem into O(n + m) with a hash index.
+- Use `NavigableMap` (`floorEntry`, `tailMap`, `subMap`) for time-based financial queries.
+
+## Prerequisites
+- Module02 (`equals`/`hashCode` contract): every hash-based structure here depends on it.
+
+## Java version notes
+| Feature | Status | Where |
+|---|---|---|
+| Records, `Stream.toList()` | **Java 17** (`toList` since 16) | `reconciliation`, tests |
+| Collections APIs used | Java 8+ | everywhere; module compiled with `--release 17` |
+| Sequenced collections (`getFirst`, `reversed`) | **Java 21** only, not used here | mention only: would simplify `LinkedHashMap` LRU code |
+
 ## Choosing a collection (the 10-second answer)
 | Need | Use | Why |
 |---|---|---|
@@ -81,3 +104,69 @@ counts.merge(k, 1, Integer::sum);
 1. Add a `TreeMap`-based `between(Instant, Instant)` to `AccountCacheV3` tracking last access time (LRU with TTL).
 2. Measure `ArrayList` vs `LinkedList` for 1M `add(0, x)` calls and explain the result.
 3. Write a `MultiCurrencyLedger` keyed by `(accountId, currency)` record and reconcile per currency.
+
+---
+
+## Production deep dive
+
+### Example 1: `reconciliation.StatementReconciler`
+Every bank reconciles its internal ledger against external statements (correspondent banks, card schemes, payment rails)
+at least daily. Unexplained differences ("breaks") must be investigated, so regulators expect reconciliation evidence.
+
+```mermaid
+flowchart LR
+    S[Statement lines] -->|index by reference, O n| IDX[(HashMap ref -> line)]
+    L[Ledger lines] -->|walk once, O m| CMP{match?}
+    IDX --> CMP
+    CMP -->|same ccy and amount| M[MATCHED]
+    CMP -->|differs| AM[AMOUNT_MISMATCH]
+    CMP -->|absent| MS[MISSING_IN_STATEMENT]
+    IDX -->|left over| UX[UNEXPECTED_IN_STATEMENT]
+    S -->|repeat ref| D[DUPLICATE]
+```
+**Expected behaviour.** Amounts are compared with `compareTo` (so `10.0` equals `10.00`), and the currency must match too.
+Duplicates on either side are reported rather than silently overwritten, because a duplicate usually means a re-sent file or a
+double booking. Output order follows the ledger (`LinkedHashMap`) so reports are diffable; the summary is an `EnumMap`.
+
+**Edge cases and failure scenarios.**
+- *Timing breaks:* a payment booked at 23:59 may appear on tomorrow's statement. Real engines carry unmatched items
+  forward for N days before escalating. This class reports a single day only.
+- *Many-to-one matches:* one statement line can settle several ledger lines (netting). That needs grouping by settlement
+  reference first (see module06 `SettlementReport`).
+- *Memory:* 200k lines is trivial. Hundreds of millions need streaming from sorted files or a database join instead.
+
+**Trade-offs.** A hash join is O(n + m) with O(n) memory. A sort-merge join is O(n log n) with streaming memory, which is
+better when both sides arrive sorted from the database.
+
+### Example 2: `history.BalanceHistory`
+**Why it matters.** Interest accrual, minimum-balance fee waivers and statements need the balance *as of a value date*,
+not "now". Corrections are often **back-valued**: booked today with last week's value date.
+
+| Operation | `TreeMap` method | Cost |
+|---|---|---|
+| Balance on any date (including quiet days) | `floorEntry(date)` | O(log n) |
+| Apply a back-valued posting | `tailMap(valueDate, true)` | O(log n + k) |
+| Minimum balance over a period | `subMap(from, true, to, true)` | O(log n + k) |
+
+**Edge cases.** Dates before the first posting return zero. A minimum over a period includes the balance carried *into* the
+period, even when the period contains no postings (a classic off-by-one bug in fee-waiver code).
+
+## In-memory vs production
+Both classes are **read models**: the source of truth is the ledger table. In production, reconciliation reads from
+immutable, timestamped snapshots so it can be re-run for audit, and `BalanceHistory` is rebuilt from ledger entries or kept as a
+materialised `daily_balance` table updated in the *same* transaction as the posting.
+
+## Common pitfalls
+- Nested-loop matching (O(n x m)): fine in tests, a 6-hour batch in production.
+- `BigDecimal.equals` for amount matching flags `10.0` vs `10.00` as a break.
+- Overwriting duplicates in a `HashMap` (`put`) hides double bookings. Use `putIfAbsent` and report.
+- Iterating a `HashMap` to produce a report gives unstable ordering. Use `LinkedHashMap` or `TreeMap`.
+- Storing one row per calendar day per account, which multiplies storage by about 365 for dormant accounts.
+- Mutating a key's `hashCode` fields while it is in a map (see module02).
+
+## Production checklist
+- [ ] Maps pre-sized for known volumes; keys are immutable value objects.
+- [ ] Matching compares amounts with `compareTo` and checks currency.
+- [ ] Duplicates and unmatched items on both sides are reported, never dropped.
+- [ ] Report ordering is deterministic.
+- [ ] Time-based queries use value date (not booking date) where the business rule demands it.

@@ -2,6 +2,29 @@
 
 Package root: `module02`. Domain: accounts, payment keys, FX quotes, config.
 
+## Overview
+Every hash-based collection, cache, idempotency store and deduplicator in a payment system depends on correct
+`equals`/`hashCode`, and every safely shared object depends on immutability. This module shows the classic bugs
+(missing `hashCode`, asymmetric `equals`, mutable keys, `BigDecimal` scale) and then three production concerns:
+**sensitive data in value objects** (`sensitive.CardNumber`), **defensive copying of arrays and collections inside records**
+(`defensive.SignedSettlementBatch`), and **allocating money without losing a cent** (`allocation.MoneyAllocator`).
+
+## Learning objectives
+- State and test the `equals`/`hashCode` contract, and explain what breaks in `HashMap`/`HashSet` when it is violated.
+- Build value objects that validate on construction, normalise their state and are safe as map keys.
+- Recognise the three record traps: shallow immutability, array components, and `toString` leaking secrets.
+- Split monetary amounts deterministically so the parts always sum to the whole (needed for reconciliation).
+
+## Prerequisites
+- Module01 (`Money`, encapsulation). Familiarity with `HashMap` buckets helps (module03 goes deep).
+
+## Java version notes
+| Feature | Status | Where |
+|---|---|---|
+| Records, compact constructors, `instanceof` patterns | **Java 17** final | all packages |
+| `HexFormat` | Java 17 API | `defensive.SignedSettlementBatch` |
+| Module compiled with `--release 17` | build setting | nothing here needs Java 20/21 |
+
 ## The contract everyone gets asked
 `equals` must be reflexive, symmetric, transitive, consistent, and `x.equals(null)` is false.
 If `a.equals(b)` then `a.hashCode() == b.hashCode()`. Breaking the second rule is the single most
@@ -88,3 +111,70 @@ BAD `MutableFxQuote`: setters, leaks `Date` and `List`. GOOD `FxQuote`: `final` 
 1. Add an `Iban` value object with checksum validation (mod-97) and prove equality after normalising whitespace/case.
 2. Write a `HashMap` stress test: insert 10 000 `PaymentRef`s then look them all up; count misses.
 3. Implement `ConfigHolder.v2` using a builder that validates that `fx.spread.bps` is an integer in [0, 10000].
+
+---
+
+## Production deep dive
+
+### Example 1: `sensitive.CardNumber`, a value object holding secret data
+**Why it matters.** A record prints all of its components in `toString()`. `log.info("charging {}", card)` or an exception
+message such as `"invalid " + request` would write a full PAN (card number) to logs, which breaches PCI-DSS. `CardNumber`:
+- validates once (12-19 digits, Luhn checksum) and **never echoes the invalid value** in the exception message;
+- overrides `toString()` to mask everything except the last 4 digits, which is also safe when nested in a `Map`/`List`;
+- keeps value equality (formatting is normalised: `"4111 1111 ..."` equals `"4111111111111111"`);
+- provides `matches()` using `MessageDigest.isEqual`, a comparison that does not exit early and so avoids timing side channels.
+
+**Limitation (read this).** Holding a clear PAN in a `String` keeps it on the heap until GC, and it can appear in heap dumps.
+Real systems tokenise the PAN at the edge (vault/HSM), so most services only ever see a token. This class is the
+*minimum* hygiene for code that must touch PANs, not a replacement for a PCI-scoped vault.
+
+### Example 2: `defensive.SignedSettlementBatch`, records with arrays and lists
+| Trap | Default record behaviour | Fix in this class |
+|---|---|---|
+| `List` component | Stores the caller's list (aliasing) | `List.copyOf` (also rejects `null` elements) |
+| `byte[]` component | Stores the caller's array **and** the accessor returns it | `clone()` in the constructor and in the accessor |
+| `equals`/`hashCode` with an array | Reference equality, so two identical batches differ | `Arrays.equals` / `Arrays.hashCode` |
+| `toString` with an array | Prints `[B@1b6d3586` | Prints a short hex prefix |
+
+**Why it matters.** A signature that can be mutated after verification is a tampering vector. A batch that is not
+`equals` to its own copy breaks deduplication of re-sent settlement files.
+
+### Example 3: `allocation.MoneyAllocator`, splitting without losing money
+```mermaid
+flowchart LR
+    T[100.00 EUR] --> C[to minor units: 10000]
+    C --> F["each share: 10000 x ratio / sum, truncated -> 3333, 3333, 3333"]
+    F --> L[leftover = 1 cent]
+    L --> R[give leftover to largest remainders, ties by position]
+    R --> O[33.34, 33.33, 33.33]
+```
+**Expected behaviour.** The sum of the parts always equals the total (proven by a 2,000-case randomised test with a fixed seed).
+Zero-ratio parties receive nothing, and negative totals (refund splits) work too. Currency scale is respected (JPY has 0 decimals).
+**Edge cases.** All ratios zero or any negative ratio is rejected. A total smaller than the number of parts gives some parts zero.
+**Trade-off.** Largest remainder is fair and deterministic. Some businesses instead require "the first party absorbs the
+rounding" or "the bank absorbs the rounding". That is a business rule, so make it explicit and documented, never accidental.
+
+## Money handling quick reference
+| Need | Do | Don't |
+|---|---|---|
+| Construct from text | `new BigDecimal("0.10")` | `new BigDecimal(0.1)` (gives `0.1000000000000000055...`) |
+| From a `double` you cannot avoid | `BigDecimal.valueOf(d)` | `new BigDecimal(d)` |
+| Compare amounts | `compareTo` | `equals` (scale-sensitive) |
+| Division | `divide(x, scale, RoundingMode.HALF_EVEN)` | `divide(x)` (throws on 1/3) |
+| Store in DB | `NUMERIC(19,4)` + currency column | `FLOAT`/`DOUBLE` |
+| Rounding for banking | `HALF_EVEN` (banker's), unless the regulation says otherwise | Rounding at every intermediate step |
+
+## Common pitfalls
+- A record with a secret component and the default `toString`.
+- Exception messages that include the invalid input (PANs, IBANs, emails), which ends up in logs and APM tools.
+- `Collections.unmodifiableList(list)` treated as immutable: it is a view, and the owner can still change it.
+- Array components in records; `java.util.Date` fields; getters returning internal mutable collections.
+- Splitting money with `divide` and rounding each part independently, which loses or creates cents.
+- Mutating an object after using it as a `HashMap`/`ConcurrentHashMap` key.
+
+## Production checklist
+- [ ] Value objects are `final`/records, validate in the constructor and normalise state (scale, case, whitespace).
+- [ ] `equals` and `hashCode` use the same fields; tested with `HashSet.contains` on an equal copy.
+- [ ] Mutable inputs copied in, mutable outputs copied out; arrays handled explicitly.
+- [ ] Sensitive values are masked in `toString` and exception messages; PANs tokenised where possible.
+- [ ] Monetary splits sum exactly to the original; the rounding policy is documented.

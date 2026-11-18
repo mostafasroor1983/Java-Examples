@@ -2,6 +2,32 @@
 
 Package root: `module11`. Domain: account locks, FX cache, reserved balances, settlement workers.
 
+## Overview
+When atomics are not enough (several accounts, waiting for a condition, read-mostly caches), you need explicit locks, and
+with locks come deadlocks, livelocks, starvation and saturated thread pools. This module covers `ReentrantLock`,
+read-write and stamped locks, deadlock causes and fixes, livelock, and `ThreadPoolExecutor` sizing and rejection policies. It adds
+**`Condition`-based waiting for funds with deadlines** (`conditions.FundingAwaitAccount`) and **programmatic deadlock
+detection** with `ThreadMXBean` (`diagnostics.DeadlockDetector`), proven against a real deadlock in the test.
+
+## Learning objectives
+- Choose between `synchronized`, `ReentrantLock`, `ReentrantReadWriteLock` and `StampedLock` with justification.
+- Prevent deadlocks (global lock ordering, `tryLock` with timeout and jitter) and *detect* them in a running system.
+- Implement condition waiting correctly: `while` loop, `signalAll`, timed and interruptible waits.
+- Size a thread pool and choose a bounded queue plus rejection policy for a payment workload.
+- Recognise starvation and livelock, and know what fairness costs.
+
+## Prerequisites
+- Module09 (threads, executors), module10 (happens-before: lock release happens-before subsequent acquire).
+
+## Java version notes
+| Feature | Status | Where |
+|---|---|---|
+| `java.util.concurrent.locks`, `ThreadPoolExecutor` | Java 5+ | everywhere |
+| `StampedLock` | Java 8 | `locks.StampedBalance` |
+| `ThreadMXBean.findDeadlockedThreads` (monitors + ownable synchronizers) | Java 6+ | `diagnostics` |
+| Records | **Java 17** | `diagnostics.DeadlockDetector.DeadlockedThread` |
+| Virtual threads + `synchronized` pinning (fixed in JDK 24) | Java 21 (preview 19/20) | module13; module compiled with `--release 17` |
+
 ## Lock selection
 | Lock | Use when | Caveats |
 |---|---|---|
@@ -102,3 +128,77 @@ the 4th task, then grows to 3, then rejects.
 1. Add fairness to `ReadWriteFxCache` and measure writer wait time under 16 readers.
 2. Implement a `Bulkhead` wrapper: one bounded pool per provider, exposing queue depth and rejections as metrics.
 3. Convert `DeadlockFixes.transferTryLock` to use `lockInterruptibly` and prove that `shutdownNow` unblocks a stuck transfer.
+
+---
+
+## Production deep dive
+
+### Example 1: `conditions.FundingAwaitAccount`, waiting for funds with a deadline
+```java
+lock.lockInterruptibly();
+try {
+    while (balance.compareTo(amount) < 0) {          // ALWAYS a loop
+        if (remaining <= 0) return false;              // deadline: no partial debit
+        remaining = fundsArrived.awaitNanos(remaining); // releases the lock while waiting
+    }
+    balance = balance.subtract(amount);
+    return true;
+} finally { lock.unlock(); }
+```
+**Why it matters.** Payouts, treasury sweeps and margin calls often depend on funds that arrive asynchronously, and they must
+proceed before a cut-off or be rejected cleanly.
+**Expected behaviour (tested).** A credit that is still insufficient wakes the waiter, which re-checks and waits again. The deadline
+returns `false` with no partial debit. With two waiters for different amounts, `signalAll` lets the one that *can* proceed
+proceed (`signal` could wake the wrong one and strand the other). Interruption during shutdown throws `InterruptedException`
+and leaves the balance unchanged.
+**Production caveat.** A blocked thread per pending payout is not durable and does not scale. Persist the payout as
+`PENDING_FUNDING` and re-evaluate on a "funds received" event. Use the in-process primitive for short, bounded waits.
+
+### Example 2: `diagnostics.DeadlockDetector`
+```mermaid
+flowchart LR
+    T1[transfer A->B holds A] -->|waits for| B((lock B))
+    T2[transfer B->A holds B] -->|waits for| A((lock A))
+    B -->|owned by| T2
+    A -->|owned by| T1
+    W[watchdog: findDeadlockedThreads] -->|cycle found| H[log report, metric, fail health check]
+```
+**Why it matters.** A deadlocked JVM still accepts TCP connections and may still pass a naive liveness probe, while every
+transfer touching those accounts hangs. A watchdog turns a silent outage into an alert and an automatic restart.
+**Test.** Two threads take their first lock, meet at a latch (making the deadlock deterministic), then request the other lock.
+The detector reports both, with owner names. Interrupting `lockInterruptibly()` breaks the cycle. Threads blocked in `synchronized`
+**cannot** be interrupted, which is one more reason to prefer `ReentrantLock` where deadlock recovery matters.
+**Note.** The detector sees *every* deadlock in the JVM (this module's `DeadlockDemo` leaves some behind on purpose), so the test
+filters by thread name, just as you would correlate with a named pool in production.
+
+## Pool sizing and rejection for payments
+| Workload | Size | Queue | Rejection |
+|---|---|---|---|
+| CPU-bound (fraud scoring, crypto) | about #cores | small bounded | `CallerRuns` for natural back-pressure |
+| Blocking I/O (DB, PSP calls) | `cores x (1 + wait/compute)`, capped by downstream pool | bounded | `Abort` and return 503 / retry-after |
+| Must-not-lose (ledger writes) | n/a | **durable** queue (DB/broker), not an executor | n/a |
+| Many short I/O tasks on Java 21 | virtual threads + `Semaphore` limit | none | `tryAcquire(timeout)` then fail fast |
+
+## Deadlock, livelock, starvation
+| Problem | Symptom | Prevention |
+|---|---|---|
+| Deadlock | threads BLOCKED forever, CPU idle | global lock order; `tryLock(timeout)`; lock fewer things; DB: same row order |
+| Livelock | threads RUNNING, no progress | randomised (jittered) backoff on retry |
+| Starvation | some requests always slow | fair locks (`new ReentrantLock(true)`, at a throughput cost), bounded pools, avoid long critical sections |
+| Thread-pool deadlock | tasks wait on tasks queued in the *same* bounded pool | never block on sub-tasks in the same pool; use separate pools or async composition |
+
+## Common pitfalls
+- `unlock()` outside `finally`; locking in one method and unlocking in another.
+- Holding a lock while calling a remote service, which converts network latency into contention.
+- Read lock to write lock "upgrade" with `ReentrantReadWriteLock`: it deadlocks with itself.
+- `StampedLock` held across blocking calls, or used reentrantly (it is not reentrant).
+- `if` instead of `while` around `await()`; `signal()` when waiters wait for different predicates.
+- Unbounded `newFixedThreadPool` queues hiding overload until an OOM.
+- Deadlock *within the database* (rows locked in different orders) looks like slow queries in Java. Check the DB's deadlock log.
+
+## Production checklist
+- [ ] Multi-resource locking uses one documented global order, or `tryLock` with timeout and jitter.
+- [ ] No locks held across I/O. Critical sections are short and measured (JFR lock profiling).
+- [ ] Deadlock watchdog plus thread-dump-on-alert are wired into health checks.
+- [ ] Pools are bounded, named, monitored (active, queue depth, rejections) and have an explicit rejection policy.
+- [ ] Waiting on conditions is bounded by deadlines and interruptible.

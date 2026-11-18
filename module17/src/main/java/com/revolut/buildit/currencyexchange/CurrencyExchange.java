@@ -23,7 +23,7 @@ public final class CurrencyExchange {
     public record Quote(String from, String to, BigDecimal amount, BigDecimal rate, BigDecimal result, long rateVersion) {
     }
 
-    public enum Outcome { COMPLETED, INSUFFICIENT_FUNDS, UNKNOWN_CURRENCY, STALE_QUOTE, INVALID_AMOUNT, SAME_CURRENCY }
+    public enum Outcome { COMPLETED, INSUFFICIENT_FUNDS, UNKNOWN_CURRENCY, STALE_QUOTE, INVALID_AMOUNT, SAME_CURRENCY, INVALID_QUOTE }
 
     private final AtomicReference<RateSnapshot> rates = new AtomicReference<>(new RateSnapshot(Map.of("USD", BigDecimal.ONE), 0));
     private final BigDecimal spreadBps; // e.g. 50 = 0.5%
@@ -46,7 +46,11 @@ public final class CurrencyExchange {
 
     public Optional<Quote> quote(String from, String to, BigDecimal amount) {
         if (amount == null || amount.signum() <= 0 || from.equals(to)) return Optional.empty();
-        RateSnapshot snap = rates.get();
+        return priceFrom(rates.get(), from, to, amount);
+    }
+
+    /** Pure pricing from one snapshot: used to issue quotes AND to verify them at execution. */
+    private Optional<Quote> priceFrom(RateSnapshot snap, String from, String to, BigDecimal amount) {
         BigDecimal fromUsd = snap.toUsd().get(from), toUsd = snap.toUsd().get(to);
         if (fromUsd == null || toUsd == null) return Optional.empty();
         BigDecimal mid = fromUsd.divide(toUsd, 10, RoundingMode.HALF_EVEN);
@@ -72,6 +76,10 @@ public final class CurrencyExchange {
         RateSnapshot snap = rates.get();
         if (!snap.toUsd().containsKey(q.from()) || !snap.toUsd().containsKey(q.to())) return Outcome.UNKNOWN_CURRENCY;
         if (snap.version() != q.rateVersion()) return Outcome.STALE_QUOTE;
+        // Quote is a public record, so a caller can construct one with any result. Never trust client-supplied prices:
+        // re-derive it from the SAME snapshot (versions match, so an honest quote reproduces exactly).
+        Quote expected = priceFrom(snap, q.from(), q.to(), q.amount()).orElseThrow();
+        if (expected.rate().compareTo(q.rate()) != 0 || expected.result().compareTo(q.result()) != 0) return Outcome.INVALID_QUOTE;
         ConcurrentHashMap<String, BigDecimal> w = wallet(customerId);
         synchronized (w) { // two-pocket atomicity for one customer
             BigDecimal have = w.getOrDefault(q.from(), BigDecimal.ZERO);

@@ -22,6 +22,8 @@ class P05Test {
         assertEquals(1, svc.executions());
         assertThrows(P05IdempotentPaymentService.ConflictException.class, () -> svc.submit(req("k1", "11")));
         assertNotEquals(r1, svc.submit(req("k2", "10")));
+        assertEquals(r1, svc.submit(req("k1", "10.00")), "same amount with a different scale is NOT a conflict");
+        assertEquals(2, svc.executions(), "k1 once and k2 once; the k1 retry did not execute again");
     }
 
     @Test

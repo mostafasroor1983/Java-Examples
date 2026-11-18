@@ -35,15 +35,14 @@ public final class LockContentionDemo {
     /** GOOD: lock striping - accounts hash to one of N locks. */
     public static final class Striped implements BalanceStore {
         private final ReentrantLock[] locks;
-        private final java.util.Map<String, BigDecimal>[] shards;
+        private final java.util.List<java.util.Map<String, BigDecimal>> shards; // List avoids a raw generic array
 
-        @SuppressWarnings("unchecked")
         public Striped(int stripes) {
             locks = new ReentrantLock[stripes];
-            shards = new java.util.Map[stripes];
+            shards = new java.util.ArrayList<>(stripes);
             for (int i = 0; i < stripes; i++) {
                 locks[i] = new ReentrantLock();
-                shards[i] = new java.util.HashMap<>();
+                shards.add(new java.util.HashMap<>());
             }
         }
 
@@ -55,7 +54,7 @@ public final class LockContentionDemo {
             int s = stripe(account);
             locks[s].lock();
             try {
-                shards[s].merge(account, amount, BigDecimal::add);
+                shards.get(s).merge(account, amount, BigDecimal::add);
             } finally {
                 locks[s].unlock();
             }
@@ -65,7 +64,7 @@ public final class LockContentionDemo {
             int s = stripe(account);
             locks[s].lock();
             try {
-                return shards[s].getOrDefault(account, BigDecimal.ZERO);
+                return shards.get(s).getOrDefault(account, BigDecimal.ZERO);
             } finally {
                 locks[s].unlock();
             }

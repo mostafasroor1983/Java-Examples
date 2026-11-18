@@ -2,6 +2,32 @@
 
 Package root: `com.revolut.interview`. Tests use JUnit 5.10.0 + AssertJ 3.24.2.
 
+## Overview
+The capstone for live coding: four katas that fintech interviewers use repeatedly (account, transfer, payment lifecycle,
+rate limiter). Each comes with a guide (`docs/02`-`05`), production-quality code and tests, including randomized concurrency
+stress tests. Guide `09_production_hardening.md` answers the inevitable follow-up: *"how would this run in production?"*
+
+## Learning objectives
+- Deliver a correct, thread-safe, tested solution in about 45 minutes while narrating invariants and trade-offs.
+- Prove correctness with concurrency tests (latches, exact totals, repeated runs), not with hope.
+- Explain the gap between an in-memory kata and a distributed, regulated production system.
+
+## Prerequisites
+- Modules 01-04 (design, value objects, collections), 08 (errors), 09-12 (concurrency), 15 (problem patterns).
+
+## Java version notes
+Compiled with `--release 17` (records, switch expressions, `instanceof` patterns). Tests use JUnit 5.10 and AssertJ 3.24.
+Nothing requires Java 20/21. If asked, mention that Java 21 virtual threads would change the *serving* model but not these invariants.
+
+## Guide index
+| Guide | Topic |
+|---|---|
+| `01_interview_format.md` | format, timing, how you are scored |
+| `02`-`05` | one kata each, with a "Deeper dive" covering edge cases, limitations and production notes |
+| `06_concurrency_checklist.md`, `07_testing_checklist.md` | what to walk through before saying "done" |
+| `08_system_design_talking_points.md` | design round |
+| `09_production_hardening.md` | **new**: from kata to production (DB, outbox, resilience, observability, regulation) |
+
 | Package | Kata | Guide |
 |---|---|---|
 | `bank` | account with invariants, `Money`, `AccountId`, `Bank` registry | `docs/02_bank_account_kata.md` |
@@ -51,3 +77,42 @@ processed.putIfAbsent(requestId, placeholder);
 1. Add an overdraft facility to `Account` and keep every test green.
 2. Make `TransferService` emit an event list (outbox) and prove exactly one event per completed transfer under concurrency.
 3. Implement a `RedisLikeFixedWindow` using a `ConcurrentHashMap<String, Long>` with TTL semantics and compare with `FixedWindowRateLimiter`.
+
+---
+
+## Production deep dive
+
+### New tests
+| Test | Proves |
+|---|---|
+| `bankTransfer.TransferServiceStressTest` (`@RepeatedTest(3)`) | 8 threads x 1,500 random transfers over 6 accounts, each request sent twice: no deadlock, money conserved, no overdraft, each request completes once, transaction history replays to the balance |
+| `payment.PaymentServiceConcurrencyTest` | 16 concurrent captures (and refunds) of one payment: exactly one wins. 50 parallel authorisations against limited funds: exactly `floor(100/7) = 14` succeed |
+
+### Kata limitations worth raising yourself (APIs intentionally unchanged)
+| Kata | Limitation | Production fix |
+|---|---|---|
+| `Account` | balance appears in the exception message | stable error code, no amounts or balances in messages |
+| `TransferService` | idempotency map unbounded; in-flight duplicate indistinguishable from completed | TTL'd idempotency table + status endpoint |
+| `TransferService` | same request id + different payload = `DUPLICATE` | reject a payload conflict (module15 P05) |
+| `PaymentService.create` | silently returns the existing payment for a different amount | compare payloads, return a conflict |
+| all | one JVM only | DB constraints and transactions, outbox, partitioning (guide 09) |
+
+```mermaid
+flowchart LR
+    K[Kata: in-memory, one JVM] -->|source of truth| DB[(DB: constraints, row locks, ledger)]
+    K -->|events| O[Outbox, broker, idempotent consumers]
+    K -->|calls out| R[timeouts, bulkhead, breaker, retry + jitter]
+    K -->|ops| M[metrics, sanitised logs, traces, reconciliation alerts]
+```
+
+## Common pitfalls in live coding
+- Starting to type before stating invariants and asking about concurrency and money representation.
+- No test for the concurrent path, or a test that sleeps instead of using latches.
+- Exceptions for expected business outcomes; or the reverse, swallowing programmer errors into a status code.
+- Claiming that the in-memory solution "guarantees exactly once" across services. It does not.
+
+## Checklist before you say "done"
+- [ ] Invariants stated and tested (including under N threads).
+- [ ] Idempotency, lock ordering and failure atomicity discussed.
+- [ ] Clock injected; no sleeps in tests.
+- [ ] Production follow-ups ready: DB, outbox, resilience, observability, security (guide 09).

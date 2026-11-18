@@ -2,6 +2,30 @@
 
 Package root: `module08`. Domain: payment failures, provider outages, ledger resources, API error bodies.
 
+## Overview
+In payments, error handling *is* business logic. A swallowed exception can mean a lost payment; a retried
+non-idempotent call can mean a double payment; an exception message can leak a card number into logs. This module
+covers the exception hierarchy, wrapping and translation, try-with-resources, retry plus circuit breaker, and API error
+bodies. It then adds three production concerns: **accumulating validation at the API boundary**, **log sanitisation**
+(PCI/GDPR), and the hardest one, **ambiguous outcomes**: what to do when a payment call times out.
+
+## Learning objectives
+- Design a domain exception hierarchy with error codes and retryability, and translate technical exceptions at boundaries.
+- Choose between exceptions and result values (fail-fast invariants vs accumulated validation).
+- Never leak sensitive data through exception messages or logs; defend against log injection.
+- Handle timeouts on money movement correctly: query status by idempotency key, resubmit only when provably safe, park unknowns.
+
+## Prerequisites
+- Module01 (domain design), module07 (sealed types and switch).
+
+## Java version notes
+| Feature | Status | Where |
+|---|---|---|
+| try-with-resources, multi-catch, suppressed exceptions | Java 7+ | `resources`, `circuitbreaker` |
+| Sealed result types, records, enhanced `switch` | **Java 17** | `validation`, `ambiguity` |
+| Helpful NullPointerException messages (on by default) | Java 15+ | runtime behaviour, see pitfalls |
+| Module compiled with `--release 21` | build setting | new code uses only Java 17 features |
+
 ## The hierarchy
 ```
 Throwable
@@ -86,3 +110,74 @@ Unknown exceptions become `500 INTERNAL_ERROR / "Unexpected error"`: internals n
 1. Add exponential backoff with jitter to `RetryPolicy` using an injected `Sleeper` interface so tests stay fast.
 2. Make `CircuitBreaker` count failures in a sliding window (rate-based) instead of consecutive failures.
 3. Add a `traceId` to `PaymentErrorResponse` and prove it is present for every mapped exception.
+
+---
+
+## Production deep dive
+
+### Example 1: `validation.PaymentRequestValidator`, accumulate at the boundary
+| Style | Use for | Example |
+|---|---|---|
+| Fail-fast exception | Internal invariants that should never be violated | `Money` constructor, aggregate methods |
+| Accumulated result | Untrusted input at the API edge | this validator returns `Valid` or `Invalid(List<FieldError>)` |
+
+**Expected behaviour.** All errors are returned in a stable order, each with `field`, a machine-readable `code` and a `hint`.
+IBANs are checked with ISO 13616 mod-97. Debtor and creditor must differ (after normalising case and spaces). Amounts must be
+positive, have at most 2 *significant* decimals (`10.500` is fine) and stay under the single-payment limit. The reference must
+use the SEPA character set.
+**Security.** Hints never echo submitted values: rejected input is exactly where PANs, scripts and injection payloads hide.
+
+### Example 2: `redaction.LogSanitizer`, the safety net
+- PANs are masked only if they pass **Luhn**, so order numbers and timestamps stay readable.
+- IBANs keep the country, check digits and last 4 characters; e-mails keep only the domain.
+- `\r` and `\n` are escaped, which prevents **log forging** (`ref=abc\nINFO payment approved`).
+- `describe(Throwable)` sanitises the whole cause chain, where leaks usually hide (a driver exception quoting a SQL parameter).
+
+> Redaction is defence in depth, not a design. The primary controls are: do not put secrets in messages, tokenise PANs at
+> the edge, and use structured logging with an allow-list of fields.
+
+### Example 3: `ambiguity.AmbiguousOutcomeHandler`, timeout is not failure
+```mermaid
+flowchart TD
+    S[submit key] -->|ACCEPTED / REJECTED| T[final answer]
+    S -->|timeout| Q[status key, up to N times]
+    Q -->|ACCEPTED / REJECTED| T
+    Q -->|NOT_FOUND| R[resubmit ONCE with SAME key]
+    R -->|answer| T
+    R -->|timeout| Q2[status again, no further resubmits]
+    Q -->|PROCESSING / timeouts| U[Unknown: park for reconciliation]
+    Q2 --> U
+```
+**Why it matters.** The most expensive bug class in payments: the provider executed the payment, the response was lost, and
+the client retried as a *new* payment, so the customer paid twice. The opposite bug: the client reported "failed", the
+customer paid again elsewhere, and the first payment settled anyway.
+**Expected behaviour (all tested).** A timeout followed by `ACCEPTED` produces no second submit. `NOT_FOUND` allows exactly one
+resubmission with the same key. A timeout after the resubmit never triggers a third submit. Anything still unresolved
+becomes `Unknown`. It is not shown as failed to the customer, and the end-of-day settlement file resolves it (module03 reconciler).
+
+## Error-handling decision table
+| Failure | Retry? | Customer sees | Ops action |
+|---|---|---|---|
+| Validation error (400) | No | field errors | none |
+| Insufficient funds / limit (402/422) | No | decline reason | none |
+| Provider 503 / connection refused before send | Yes, with backoff + same key | "processing" | alert on rate |
+| Read timeout after send | **Only after status check** | "processing" | reconcile unknowns |
+| Circuit open | No (fail fast) | "temporarily unavailable" | page if prolonged |
+| `Error` (OOM, `LedgerCorruptedError`) | No | 500 | crash, restart, investigate |
+
+## Common pitfalls
+- `catch (Exception e) { return null; }` or logging and continuing, so money moves with no record.
+- Wrapping without the cause (`new X(e.getMessage())`), which loses the stack trace and root-cause type.
+- Catching `InterruptedException` without restoring the interrupt flag.
+- Retrying non-retryable errors, or retrying without an idempotency key.
+- Treating a timeout as failure (double payment) or as success (phantom payment).
+- Exception messages containing PANs, IBANs, emails, tokens or full request bodies.
+- Helpful NPE messages (Java 15+) can include variable and field names. Fine internally, but don't return them to API clients.
+- Returning stack traces in API error bodies.
+
+## Production checklist
+- [ ] Domain exceptions carry a stable code and a `retryable` flag; technical exceptions are translated at adapters.
+- [ ] API validation returns all field errors; no input values in messages.
+- [ ] Logs go through structured, allow-listed fields; a sanitiser is a second layer; CRLF is escaped.
+- [ ] Every money-moving call has an idempotency key, bounded retries with backoff, and a status-query path.
+- [ ] Unknown outcomes are parked, alerted and reconciled, never auto-failed or auto-retried as new payments.

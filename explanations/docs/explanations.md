@@ -3,6 +3,27 @@
 Package root: `explanations.sealed`. A single focused example: `PaymentOutcome` sealed into `Success`, `Failure`, `Pending`,
 and `PatternMatchingDemo` showing every pattern-matching form Java 21 offers over it.
 
+## Overview
+A focused companion to module07: one sealed type (`PaymentOutcome`) and every pattern-matching form over it. New:
+`OutcomeResponder`, a realistic decision function that maps each outcome to the client-facing API response and the internal
+follow-up action. It encodes a security rule in the type-driven switch: **a fraud decline must be indistinguishable from an ordinary decline**.
+
+## Learning objectives
+- Read and write all pattern-matching forms (type, record, nested, guarded, `null`, `instanceof`).
+- Use guards to express business rules next to the case they refine, and order cases from specific to general.
+- Separate *what the client sees* from *what the system does*, and avoid leaking sensitive decision details.
+
+## Prerequisites
+- Records and sealed interfaces (module07).
+
+## Java version notes
+| Form | Java 17 | Java 19/20 | Java 21 |
+|---|---|---|---|
+| `instanceof` type pattern | final | final | final |
+| `switch` type patterns, guards (`when`), `case null` | preview | preview | **final** |
+| Record (deconstruction) patterns, nested | not available | preview | **final** |
+Compiled with `--release 21`, no preview flags needed.
+
 ## Why sealed + records
 A payment has a closed set of outcomes. Modelling that as a sealed interface means:
 - the compiler enforces exhaustive handling (no `default` hiding a forgotten case),
@@ -73,3 +94,33 @@ enum Status { SUCCESS, FAILURE, PENDING } String authCode; Reason reason; Instan
 1. Add `Reversed(paymentId, originalAuthCode)` and fix every compile error the switches report.
 2. Write `PatternMatchingDemo.retryDelay(PaymentOutcome)` returning `Optional<Duration>` using only deconstruction patterns.
 3. Replace `isFinal` with a `switch` and compare readability.
+
+---
+
+## Production deep dive: `OutcomeResponder`
+```mermaid
+flowchart TD
+    O[PaymentOutcome] -->|Success| S[200 SETTLED, no action]
+    O -->|Pending| P[202 PROCESSING + schedule status check]
+    O -->|Failure FRAUD| F[402 generic decline + OPEN FRAUD CASE]
+    O -->|Failure INVALID_REQUEST| I[400 invalid request]
+    O -->|Failure retryable| R[202 PROCESSING + retry with backoff]
+    O -->|other Failure| D[402 generic decline]
+    O -->|null| N[500]
+```
+**Why it matters.** Response mapping is where sensitive decisions leak. "Declined: suspected fraud" teaches attackers which
+card or device signals to change. Here the fraud and insufficient-funds responses are *equal objects* (tested), while the
+internal action differs (`OpenFraudCase`). A retryable provider error is reported as "processing" (202), because telling the
+customer "failed" when a retry may succeed leads them to pay twice through another channel.
+
+**Case ordering.** Guarded cases (`when reason == FRAUD`, `when retryable`) must come before the unguarded `case Failure f`.
+The compiler rejects an unguarded case that dominates later ones, which is another safety net.
+
+**Edge cases (tested).** A `Pending` check time in the past yields a zero delay (never negative); amounts are rendered with
+`toPlainString()` (`1E+1` becomes `10`); `null` maps to 500 instead of an NPE.
+
+## Common pitfalls
+- `default ->` in a switch over a sealed type, which hides newly added outcomes.
+- Putting guards after a general case (compile error) or encoding rules as nested `if`s inside one case.
+- Returning internal reasons (FRAUD, sanctions hit, risk score) in API messages or error codes.
+- Forgetting `case null` and relying on a `NullPointerException` from the switch.

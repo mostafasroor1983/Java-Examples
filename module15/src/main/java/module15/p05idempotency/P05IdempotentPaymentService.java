@@ -11,6 +11,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class P05IdempotentPaymentService {
     public record Request(String idempotencyKey, String accountId, BigDecimal amount) {
+        /**
+         * Payload comparison for conflict detection. Record equals() compares BigDecimal by scale, so a client that
+         * retries "10.00" after "10.0" would be told the key was reused with a DIFFERENT payload. Amounts are compared
+         * with compareTo instead.
+         */
+        boolean samePayloadAs(Request other) {
+            return accountId.equals(other.accountId) && amount.compareTo(other.amount) == 0;
+        }
     }
 
     public record Response(String paymentId, String status) {
@@ -37,8 +45,13 @@ public final class P05IdempotentPaymentService {
             return new Stored(req, new java.util.concurrent.CompletableFuture<>());
         });
         if (!creator[0]) {
-            if (!stored.request().equals(req)) throw new ConflictException(req.idempotencyKey());
-            return stored.result().join(); // wait for / read the first caller's result
+            if (!stored.request().samePayloadAs(req)) throw new ConflictException(req.idempotencyKey());
+            try {
+                return stored.result().join(); // wait for / read the first caller's result
+            } catch (java.util.concurrent.CompletionException e) {
+                // surface the original failure (e.g. IllegalArgumentException), not the CompletableFuture wrapper
+                throw e.getCause() instanceof RuntimeException re ? re : e;
+            }
         }
         try {
             Response r = execute(req);

@@ -23,3 +23,21 @@ Follow-up questions
 - "Why `synchronized` and not `AtomicReference<Money>`?" - both work; CAS loop avoids blocking but the statement list needs the same atomicity, so one lock is simplest.
 - "How would you persist?" - append-only ledger table, balance derived or maintained with optimistic version column.
 - "Overdraft facility?" - add `overdraftLimit` to the invariant check (module15 P02).
+
+## Deeper dive: what a strong candidate adds
+**Edge cases to test or at least name:** zero and negative amounts, sub-penny amounts (`0.001 GBP` must be rejected, not rounded
+silently), currency mismatch, very large amounts (no overflow with `BigDecimal`, but there are business limits), and the statement
+returned to callers being unmodifiable.
+
+**Security and privacy.** `InsufficientFundsException` in this kata includes the balance in its message. That is handy in an interview,
+but in production messages reach logs and APMs, so prefer a code plus the account id and keep the balance out (module08 `LogSanitizer`).
+
+**In-memory vs production.**
+| Concern | Kata | Production |
+|---|---|---|
+| Atomicity | `synchronized (lock)` | DB transaction; conditional `UPDATE ... SET balance = balance - ? WHERE id = ? AND balance >= ?` |
+| Audit trail | in-memory `List<Transaction>` | append-only ledger table, immutable, retained per regulation (often 5-10 years) |
+| Multiple instances | not handled | DB is the single source of truth; or one owner per account partition |
+
+**Common mistakes live.** `double` for money; `equals` on `BigDecimal`; returning the internal list; locking on `this`;
+forgetting to record the transaction inside the same critical section as the balance change.

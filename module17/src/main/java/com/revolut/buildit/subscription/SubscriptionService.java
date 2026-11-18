@@ -88,14 +88,17 @@ public final class SubscriptionService {
         LocalDate now = today.get();
         int renewed = 0;
         for (String id : List.copyOf(subs.keySet())) {
-            Subscription before = subs.get(id);
-            if (before == null || before.nextBillingDate().isAfter(now)) continue;
-            Subscription after = subs.compute(id, (k, s) -> {
+            boolean[] charged = {false};
+            subs.computeIfPresent(id, (k, s) -> {
+                // Every condition is re-checked INSIDE the atomic compute: a check outside it lets two overlapping
+                // billing runs both see "due" and charge twice.
+                if (s.status() == Status.CANCELLED || s.nextBillingDate().isAfter(now)) return s; // never bill cancelled
                 if (s.status() == Status.PENDING_CANCELLATION) return s.with(s.plan(), Status.CANCELLED, s.periodStart(), s.nextBillingDate());
+                charged[0] = true;
                 charge(k, s.plan().monthlyPrice(), "renewal " + s.plan(), now);
                 return s.with(s.plan(), Status.ACTIVE, s.nextBillingDate(), s.nextBillingDate().plusMonths(1));
             });
-            if (after.status() == Status.ACTIVE) renewed++;
+            if (charged[0]) renewed++;
         }
         return renewed;
     }
