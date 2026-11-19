@@ -119,7 +119,8 @@ real code usually does), so the reference is present. Don't rely on the optimisa
 **In short.** Multiple top-level classes in one file make compilation order-dependent. Use one top-level type per file, and
 static nested types for related variants.
 **Example.** `Item25SingleTopLevelClass` nests its sealed interface and records. The repo's own `explanations/.../PaymentOutcome.java`
-violates this item, and `javac -Xlint` reports "auxiliary class ... should not be accessed from outside its own source file".
+used to violate this item: `javac -Xlint` reported "auxiliary class ... should not be accessed from outside its own source file"
+37 times. `Success`, `Failure` and `Pending` now each have their own file, and the warning is gone.
 **Java 17/21.** Unchanged; sealed hierarchies make nesting natural.
 **Proof.** `item25_nestedTypesInsteadOfExtraTopLevelClasses`.
 

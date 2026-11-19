@@ -1,6 +1,6 @@
 # Overall Cheat Sheet - 5-hour review before the technical interview
 
-A timed, self-testing review of the whole repository (modules 01-17 + `explanations`) for a senior/staff Java backend
+A timed, self-testing review of the whole repository (modules 01-18 + `explanations`) for a senior/staff Java backend
 interview in fintech. Every block has: **key facts**, **code to recognise**, **traps**, a **self-quiz** (answers hidden,
 so try first), and **where to look** in the repo if something feels shaky.
 
@@ -734,3 +734,4 @@ java -Djdk.tracePinnedThreads=full ... # virtual thread pinning (JDK 21-23)
 | Live-coding katas and production hardening | `module16/docs/` |
 | Build It systems | `module17/docs/`, `REVOLUT_BUILD_IT_PROBLEMS.md` |
 | Sealed types and pattern matching | `explanations/docs/explanations.md` |
+| Effective Java 3rd ed., all 90 items with Java 17/21 updates | `module18/docs/module18.md` |
